@@ -1,42 +1,26 @@
-# GUI
 import tkinter as tk 
 import tkinter.messagebox as msgbox  
-
-# 음성 인식
 import speech_recognition as sr 
-
-# 웹 브라우저
 import webbrowser
-
-# OS 수준 기능
 import os
-import subprocess  # 외부 프로그램
-
-# 여러 작업을 동시에 수행
+import subprocess
 import threading
-
-# 볼륨 조절
-from ctypes import cast, POINTER  # C 언어 스타일 포인터
+from ctypes import cast, POINTER  
 from comtypes import CLSCTX_ALL  
-from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume  # 볼륨 제어
-
-# COM 초기화
+from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
 import pythoncom
-
-# 시스템 함수 호출
 import ctypes
-
-# 경로 관련 조작
 from pathlib import Path 
-
-# 파일 복사, 이동, 삭제
 import shutil
-
+import requests
+from bs4 import BeautifulSoup
+import re
 
 root = tk.Tk()
 root.title('음성어시스턴트')
 root.geometry('400x800')
 root.resizable(False, False)
+root.iconbitmap('favicon.ico')
 
 is_listening = False
 title_label = tk.Label(root, text='음성\n어시스턴트', font=('Serif', 50,))
@@ -51,6 +35,7 @@ def available_program_show():
     pg_win.title('사용가능 목록')
     pg_win.geometry('400x600')
     pg_win.resizable(False, False)
+    pg_win.iconbitmap('favicon.ico')
 
     frame = tk.Frame(pg_win)
     frame.pack(fill='both', expand=True)
@@ -114,12 +99,16 @@ def available_program_show():
 def show_tip():
     tip_window = tk.Toplevel(root)
     tip_window.title('명령어 목록')
-    tip_window.geometry('400x600')
+    tip_window.geometry('400x750')
     tip_window.resizable(False, False)
+    tip_window.iconbitmap('favicon.ico')
 
     tips = [
         "[검색어] 찾아(줘) - 구글에서 검색",
         "유튜브에서 [검색어] 찾아(줘) - 유튜브에서 검색",
+        '종료,다시시작 시간설정이 가능함',
+        '예-3분 10초뒤에 꺼줘',
+        '예-50분뒤에 다시 시작',
         "컴퓨터 꺼줘 - 컴퓨터 종료",
         "컴퓨터 다시 시작 - 컴퓨터 재부팅",
         "컴퓨터 잠금 - 컴퓨터 잠금",
@@ -133,7 +122,9 @@ def show_tip():
         "종료하기 - 프로그램 종료",
         '휴지통 비우기 - 휴지통 비우기',
         '임시파일 정리해 줘 - 임시파일 정리',
-        '디스크 정리해 줘 - 디스크 정리'
+        '디스크 정리해 줘 - 디스크 정리',
+        '날씨 알려줘 - 날씨 확인(서울)',
+        '(국내주식)주가 알려줘 - 주가 확인'
     ]
 
     for tip in tips:
@@ -144,6 +135,20 @@ def show_tip():
 
 bt2 = tk.Button(root, text='모든 명령어', font=('Serif', 20), width=22, height=2, command=show_tip, relief='raised', bd=2)
 bt2.pack(pady=10)
+
+def get_weather(city: str = 'Seoul', api_key: str = 'cd01b34e513b1d9ff82ce02f364ecc26'):
+    url = f'https://api.openweathermap.org/data/2.5/weather?q={city}&appid={api_key}&units=metric'
+    response = requests.get(url)
+
+    if response.status_code != 200:
+        return [city, None, None, '에러']
+
+    data = response.json()
+    temp = data['main']['temp']
+    humidity = data['main']['humidity']
+    weather_main = data['weather'][0]['main']
+    rain_status = weather_main
+    return [city, temp, humidity, rain_status]
 
 def set_volume(action):
     pythoncom.CoInitialize()
@@ -190,19 +195,112 @@ def clear_temp_files():
     except Exception as e:
         msgbox.showerror("오류", f"임시파일 정리 중 오류가 발생했습니다:\n{e}")
 
+def shutdown_time(text):
+    minutes = 0
+    seconds = 0
+    if '분' in text:
+        try:
+            idx = text.index('분')
+            start_idx = idx - 1
+            while start_idx >= 0 and text[start_idx].isdigit():
+                start_idx -= 1
+            start_idx += 1
+            minutes = int(text[start_idx:idx])
+        except Exception:
+            minutes = 0
+    if '초' in text:
+        try:
+            idx = text.index('초')
+            start_idx = idx - 1
+            while start_idx >= 0 and text[start_idx].isdigit():
+                start_idx -= 1
+            start_idx += 1
+            seconds = int(text[start_idx:idx]) 
+        except Exception:
+            seconds = 0
+
+    total = minutes * 60 + seconds
+    return total
+
+
+resp = requests.get('https://finance.naver.com/sise/sise_market_sum.naver?sosok=0&page=1')
+html_data = resp.text
+
+soup = BeautifulSoup(html_data, 'html.parser')
+
+tbody = soup.find('tbody')
+
+stocks = []
+
+
+for row in tbody.find_all('tr'):
+    tds = row.find_all('td')
+    
+    if len(tds) < 12:
+        continue
+
+    stock_name_tag = tds[1].find('a')
+    if stock_name_tag:
+        stock_name = stock_name_tag.text.strip()
+        href = stock_name_tag['href']
+        stock_code_match = re.search(r'code=(\d+)', href)
+        stock_code = stock_code_match.group(1) if stock_code_match else ''
+    else:
+        stock_name = ''
+        stock_code = ''
+
+    current_price = tds[2].text.strip().replace(',', '')
+    market_cap = tds[6].text.strip().replace(',', '')
+    num_shares = tds[7].text.strip().replace(',', '')
+    foreign_ratio = tds[8].text.strip().replace(',', '')
+    volume = tds[9].text.strip().replace(',', '')
+    per = tds[10].text.strip()
+    roe = tds[11].text.strip()
+
+    stock_data = {
+        '종목명': stock_name,
+        '종목코드': stock_code,
+        '현재가': current_price,
+        '시가총액': market_cap,
+        '상장주식수': num_shares,
+        '외국인비율': foreign_ratio,
+        '거래량': volume,
+        'PER': per,
+        'ROE': roe
+    }
+
+    stocks.append(stock_data)
+
+def find_stock(name):
+    for stock in stocks:
+        if stock['종목명'] == name:
+            return stock
+    return None
+
+def print_stock(stock):
+    return (
+        f"종목명: {stock['종목명']}\n"
+        f"현재가: {stock['현재가']}원\n"
+        f"시가총액: {int(stock['시가총액']):,}억\n"
+        f"상장주식수: {int(stock['상장주식수']):,}주\n"
+        f"거래량: {int(stock['거래량']):,}주"
+    )
+
+    
+
 def voice_loop():
     global is_listening
     recognizer = sr.Recognizer()
     recognizer.energy_threshold = 300
     recognizer.dynamic_energy_threshold = True
-    recognizer.pause_threshold = 0.8
+    recognizer.pause_threshold = 2
     with sr.Microphone() as source:
         try:
             print("듣는 중...")
             btn1.config(text='음성\n인식 중', font=('Serif', 45,))
             root.update()
 
-            audio = recognizer.listen(source, timeout=5, phrase_time_limit=5)
+            audio = recognizer.listen(source, timeout=9, phrase_time_limit=7)
             text = recognizer.recognize_google(audio, language='ko_KR')
             print(f"인식됨: {text}")
 
@@ -217,6 +315,21 @@ def voice_loop():
 
             if text in ['안녕', '안녕하세요', '여보세요', '하이', '하이요']:
                 msgbox.showinfo('인사', '안녕하세요! 무엇을 도와드릴까요?')
+
+            elif '주가' in text:
+                idx = text.index('주가')
+                company = text[:idx].strip().replace(' ', '')  # '주가' 앞 단어
+                if company == '네이버':
+                    company = 'NAVER'
+                stock_info = find_stock(company)
+                if stock_info:
+                    msgbox.showinfo('주가 정보', print_stock(stock_info))
+                else:
+                    msgbox.showinfo('알림', f'"{company}"의 주가 정보를 찾을 수 없습니다.')
+
+
+            elif '날씨' in text:
+                msgbox.showinfo('날씨알리미',f'''도시 : {get_weather()[0]}\n현재온도 : {get_weather()[1]}\n습도 : {get_weather()[2]}\n강수 : {get_weather()[3]}  ''')
 
             elif text in ['도움말', '명령어', '명령어 목록', '도움말 보기']:
                 show_tip()
@@ -257,13 +370,19 @@ def voice_loop():
                 root.destroy()
                 return
             
-            elif text in ['컴퓨터 꺼줘', '컴퓨터 종료', '컴퓨터 꺼', '컴퓨터 꺼질래']:
-                os.system('shutdown /s /t 3')
-                msgbox.showinfo('알림', '컴퓨터가 3초 후에 종료됩니다.')
+            elif any(kw in text for kw in ['컴퓨터 꺼줘', '컴퓨터 종료', '컴퓨터 꺼', '컴퓨터 꺼질래']):
+                sec = shutdown_time(text)
+                if sec == 0:
+                    sec = 3 
+                os.system(f'shutdown /s /t {sec}')
+                msgbox.showinfo('알림', f'컴퓨터가 {sec//60}분 {sec%60}초 후에 종료됩니다.')
 
             elif text in ['컴퓨터 다시 시작', '컴퓨터 재부팅', '컴퓨터 리부팅', '컴퓨터 리스타트']:
-                os.system('shutdown /r /t 3')
-                msgbox.showinfo('알림', '컴퓨터가 3초 후에 다시 시작됩니다.')
+                sec = shutdown_time(text)
+                if sec == 0:
+                    sec = 3 
+                os.system(f'shutdown /r /t {sec}')
+                msgbox.showinfo('알림', f'컴퓨터가 {sec//60}분 {sec%60}초 후에 다시 시작됩니다.')
 
             elif text in ['컴퓨터 잠금', '컴퓨터 잠궈', '컴퓨터 슬립','컴퓨터 절전모드']:
                 os.system('rundll32.exe user32.dll,LockWorkStation')
